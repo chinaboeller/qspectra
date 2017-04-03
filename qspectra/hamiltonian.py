@@ -630,6 +630,179 @@ class ElectronicHamiltonian(Hamiltonian):
             if 'g' in subspace:
                 custom_labels[0] = 'g'
             return custom_labels
+            
+class ElectronicHamiltonianBathCoupling(Hamiltonian):
+    """
+    Hamiltonian for an electronic system with coupling to an external field
+    and the same bath but different reorganisation energy at each pigment
+
+    Parameters
+    ----------
+    H_1exc : np.ndarray
+        Matrix representation of this Hamiltonian in the 1-excitation
+        subspace
+    bath : bath.Bath, optional
+        Object containing the bath information (i.e., correlation function
+        and temperature). Each site is assumed to be linearly coupled to an
+        identical bath of this form.
+    bath_coupling : np.ndarray
+        n x 1 array of relative reorganisation energy ranging from 0 to 1
+    dipoles : np.ndarray, optional
+        n x 3 array of dipole moments for each site.
+    disorder : number or function, optional
+        Full-width-at-half-maximum of diagonal, Gaussian static disorder
+        (independently sampled as each site) or a function which generates
+        new examples of static disorder. This argument controls how to
+        generate new samples with `sample_ensemble` method. By default
+        (`disorder=None`), no static disorder is added.
+
+        If a function (or other callable), it should take a
+        `np.random.RandomState` object and return an array which can be
+        added to `H_1exc` to provide a new sample of static disorder. For
+        example, to produce Gaussian static disorder with standard deviation
+        100 for system with two sites, you could write::
+
+            def disorder(random_state):
+                return np.diag(100 * random_state.randn(2))
+
+        NOTE: Only use methods of the `random_state` object to generate
+        random numbers in your custom function. Otherwise, your random
+        ensemble will not be reproducible, which may add noise when you
+        calculate ensemble averages with the spectroscopy methods.
+    random_seed : int, optional
+        Random seed used to produce reproducible sampling with the
+        `sample_ensemble` method. Must be a non-negative integer or other
+        valid input for np.random.RandomState.
+    energy_spread_extra : float, optional
+        Default extra frequency to add to the spread of energies when
+        determining the frequency step size automatically. To avoid
+        unnecessary work when calculating quantities like correlation
+        functions, this constant should be set to roughly the width of
+        inhomogeneous broadening or the dephasing rate. Units should match
+        `H_1exc`. By default, this is set to one percent of the average
+        excited state transition energy.
+    """
+    def __init__(self, H_1exc, bath=None, bath_coupling=None, dipoles=None, disorder=None,
+                 random_seed=0, energy_spread_extra=None, site_labels=None):
+        self.H_1exc = check_hermitian(H_1exc)
+        self.bath = bath
+        self.bath_coupling = np.asarray(bath_coupling) if bath_coupling is not None else None
+        self.dipoles = np.asarray(dipoles) if dipoles is not None else None
+        self.disorder = disorder
+        self.random_seed = random_seed
+        # used by various dynamics methods to determine indices:
+        self.n_vibrational_states = 1
+        super(ElectronicHamiltonianBathCoupling, self).__init__(energy_spread_extra, site_labels)
+
+    _implements_eq = True
+
+    def _eq(self, other, max_depth):
+        return (np.all(self.H_1exc == other.H_1exc) and
+                self.bath == other.bath and
+                np.all(self.bath_coupling == other.bath_coupling) and
+                np.all(self.dipoles == other.dipoles) and
+                self.disorder == other.disorder and
+                self.random_seed == other.random_seed and
+                self.energy_spread_extra == other.energy_spread_extra and
+                super(ElectronicHamiltonianBathCoupling, self)._eq(other, max_depth))
+
+    @property
+    def n_sites(self):
+        return len(self.H_1exc)
+
+    @imemoize
+    def H(self, subspace):
+        """
+        Returns the system Hamiltonian in the given Hilbert subspace as a matrix
+        """
+        return operator_extend(self.H_1exc, subspace)
+
+    def _in_rotating_frame(self, rw_freq):
+        H_1exc = self.H_1exc - rw_freq * np.identity(self.n_sites)
+        return type(self)(H_1exc, self.bath, self.bath_coupling, self.dipoles, 
+                          self.disorder, self.random_seed, 
+                          self.energy_spread_extra, self.site_labels)
+
+    def _sample(self, n, random_orientations):
+        if self.disorder is None:
+            if not random_orientations:
+                warnings.warn('called sample with `disorder=None` and '
+                              '`random_orientations=False`: sampled '
+                              'Hamiltonian is identical to original',
+                              RuntimeWarning, stacklevel=2)
+            disorder_func = lambda x: 0
+        elif isinstance(self.disorder, Number):
+            disorder_func = diagonal_gaussian_disorder(self.disorder,
+                                                       self.n_sites)
+        else:
+            disorder_func = self.disorder
+
+        random_seed = list(np.atleast_1d(self.random_seed)) + [n]
+        random_state = check_random_state(random_seed)
+
+        H_1exc = self.H_1exc + disorder_func(random_state)
+        if random_orientations:
+            dipoles = np.einsum('mn,in->im',
+                                random_rotation_matrix(random_state),
+                                self.dipoles)
+        else:
+            dipoles = self.dipoles
+        return type(self)(H_1exc, self.bath, dipoles, self.disorder,
+                          random_seed, self.energy_spread_extra,
+                          self.site_labels)
+
+    def dipole_operator(self, subspace='gef', polarization='x',
+                        transitions='-+'):
+        """
+        Return the matrix representation in the given subspace of the requested
+        dipole operator
+        """
+        if self.dipoles is None:
+            raise HamiltonianError('transition dipole moments undefined')
+        trans_ops = [transition_operator(n, self.n_sites, subspace, transitions)
+                     for n in range(self.n_sites)]
+        return np.einsum('nij,nk,k->ij', trans_ops, self.dipoles,
+                         polarization_vector(polarization))
+
+    def number_operator(self, site, subspace='gef'):
+        """
+        Returns the number operator a_n^\dagger a_n for site n
+        """
+        return operator_extend(
+            np.diag(unit_vec(site, self.n_sites, dtype=float)), subspace)
+
+    def system_bath_couplings(self, subspace='gef'):
+        """
+        Return a list of matrix representations in the given subspace of the
+        system-bath coupling operators
+        """
+        if self.bath is None:
+            raise HamiltonianError('bath undefined')
+        return np.array([self.bath_coupling[i]*self.number_operator(n, subspace)
+                         for i, n in enumerate(range(self.n_sites))])
+
+    def basis_labels(self, subspace='gef', braket=False):
+        """
+        If custom labels are used but the ground state is included, then the
+        label "g" is used to represent the ground state. If site_labels is None,
+        then the Fock states are used (000, 100, 010, 001 ...)
+        """
+        labels = self._get_Fock_basis_labels(subspace, self.site_labels)
+        return add_braket(labels) if braket else labels
+
+    def _get_Fock_basis_labels(self, subspace, labels=None):
+        labels_1exc = np.array([10 ** (self.n_sites - i - 1)
+                                for i in range(self.n_sites)], dtype='O')
+        labels_full = np.diag(operator_extend(np.diag(labels_1exc), subspace))
+        label_indices = [str(i).zfill(self.n_sites) for i in labels_full]
+        if labels is None:
+            return label_indices
+        else:
+            custom_labels = [','.join([label for i, label in enumerate(labels)
+                             if state[i] == '1']) for state in label_indices]
+            if 'g' in subspace:
+                custom_labels[0] = 'g'
+            return custom_labels
 
 class VibronicHamiltonian(Hamiltonian):
     """
