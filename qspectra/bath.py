@@ -49,10 +49,20 @@ class Bath(object):
 
 class ArbitraryBath(Bath):
     def __init__(self, temperature, spectral_density_func,
-                 spectral_density_limit_at_zero):
+                 spectral_density_limit_at_zero, reorg_energy, cutoff_freq):
         self.temperature = temperature
         self.spectral_density_func = spectral_density_func
         self.spectral_density_limit_at_zero = spectral_density_limit_at_zero
+        self.cutoff_freq = float(cutoff_freq)
+        self.reorg_energy = float(reorg_energy)
+        
+    @property
+    def spectral_density_limit_at_zero(self):
+        return self._spectral_density_limit_at_zero
+    
+    @spectral_density_limit_at_zero.setter
+    def spectral_density_limit_at_zero(self,value):
+        self._spectral_density_limit_at_zero = value
 
 
 class UncoupledBath(Bath):
