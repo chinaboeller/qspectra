@@ -41,7 +41,7 @@ def ground_state(hamiltonian_matrix):
     # use np.conj()
     # also note: the energies E from eigh are sorted in ascending order, so we
     # know that E[0] is the minimum
-    rho = np.mean([np.outer(U[:, i], U[:, i]) for i in xrange(len(U))
+    rho = np.mean([np.outer(U[:, i], U[:, i]) for i in range(len(U))
                    if E[i] == E[0]], axis=0)
     return rho.astype(complex)
 
@@ -228,7 +228,7 @@ class Hamiltonian(object):
         Note: The ensemble returned by this method is not stochastic. The first
         n ensemble members will always be the same.
         """
-        for n in xrange(ensemble_size):
+        for n in range(ensemble_size):
             yield self.sample(n, random_orientations)
 
     def sample(self, n=None, random_orientations=False):
@@ -587,7 +587,7 @@ class ElectronicHamiltonian(Hamiltonian):
         if self.dipoles is None:
             raise HamiltonianError('transition dipole moments undefined')
         trans_ops = [transition_operator(n, self.n_sites, subspace, transitions)
-                     for n in xrange(self.n_sites)]
+                     for n in range(self.n_sites)]
         return np.einsum('nij,nk,k->ij', trans_ops, self.dipoles,
                          polarization_vector(polarization))
 
@@ -606,7 +606,7 @@ class ElectronicHamiltonian(Hamiltonian):
         if self.bath is None:
             raise HamiltonianError('bath undefined')
         return np.array([self.number_operator(n, subspace)
-                         for n in xrange(self.n_sites)])
+                         for n in range(self.n_sites)])
 
     def basis_labels(self, subspace='gef', braket=False):
         """

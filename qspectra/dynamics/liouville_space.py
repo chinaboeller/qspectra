@@ -84,8 +84,8 @@ def tensor_to_super(tensor_operator):
     """
     N = tensor_operator.shape[0]
     super_operator = np.empty((N ** 2, N ** 2), dtype=tensor_operator.dtype)
-    for i in xrange(N):
-        for j in xrange(N):
+    for i in range(N):
+        for j in range(N):
             super_operator[i::N, j::N] = tensor_operator[i, :, j, :]
     return super_operator
 
